@@ -1,0 +1,253 @@
+---
+title: "Technical Exercise"
+author: "Dennis Valentine"
+date: "2024-01-11"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Libraries ---------------------------------------------------------------
+
+library(dplyr)
+library(ggplot2)
+```
+
+```{r loading_data}
+md <- read.csv(file = "data/MedicalDictionary.csv")
+
+
+patient <- read.csv(file = "data/Patient.csv") %>% 
+  select(-X) %>% # cleaning data 
+  filter(acceptable == 1) %>% # QC
+  unique() %>% #remove duplicate rows
+  mutate(regstartdate = as.Date(regstartdate), regenddate = as.Date(regenddate )) %>%  
+  filter(regstartdate >= as.Date("1945-01-01") & regstartdate <= as.Date("2023-01-01")) %>%   # removing mistakes in the regdate 
+  filter( (regenddate >= as.Date("1945-01-01") & regenddate <= as.Date("2023-01-01")) | is.na(regenddate)) %>%  # NA here could be active patients -- make sure no one las left before joiing
+  filter( ! (regenddate <=  regstartdate) | is.na(regenddate)) %>% 
+  group_by(patid) %>% 
+  add_count()
+
+patient %>% 
+  arrange(patid) %>% 
+  filter(n > 1) # YOB is different, gender is different -- this causes problems later on. At this point I have to leave the data in - one way this can be addressed is if it can be linked to xternal data sets like HES to establish the geneder and YOB.   
+
+
+
+obvs <- read.csv(file = "data/Observation.csv") %>% 
+  select(-X) %>% # medcodeid links to the dictionary 
+  mutate(enterdate  = as.Date(enterdate)) %>% 
+  filter(enterdate >= as.Date("1945-01-01") & enterdate <= as.Date("2023-01-01"))   # removing mistakes  
+# sum(obvs$obsid == "") # checking the data 
+# sum(is.na(obvs$obsid))
+
+
+problem <- read.csv(file = "data/Problem.csv")
+problem %>% head()
+
+# Consultation.csv
+cons <- read.csv(file = "data/Consultation.csv") %>% 
+  unique()
+cons %>% head() 
+
+# Practice.csv
+practice <- read.csv(file = "data/Practice.csv")
+practice
+
+```
+
+## Joins
+Join across the tables to generate a table or dataframe with the following information. In comments, explain how you dealt with any inconsistencies in the data.
+
+```{r cars}
+
+p1 <- patient %>% # I've already cleaned up the data as I was exporing it. 
+  transmute(patid, age_at_2023 = 2023 - as.integer(yob), gender, regstartdate,  regenddate) %>% 
+  unique() # try to remove multiple patid 
+
+
+df <- left_join(x = p1, y = cons %>% select(patid:pracid), by = "patid") %>% # 1: many mapping, -- gender issues with FyHqc6 -- leave them in right now, no real way to know what the true gender is without additional data e.g. link to HES
+  left_join(y =  obvs, by = c("patid", "consid", "pracid")) %>%  # obvs[30817,] == FyHqc6 person ID causing issues again. most likely more people in here are duplicates with issues but gobal QC on the data set is out of scope
+  select(-obsdate ) %>% # this is subjective - people might not recall correctly, skewing answers. But then again if they don't get an appointment for weeks then the entry date is also skewed. I have to make a call because we don't have this in THIN. Furture work - plot histogram between two date types. Not sure what Aurum's normal practice is here  
+  left_join(y = md, by = c("medcodeid" = "aurum_code")) %>% # dates causing issues -- just take the minimum data and again push for global QC 
+   # not asked for term but this is one of those times I'll do more because from experience, clients don't always know what they want. They need something human-readable. Won't break protocol if locked in a contract or approved by some review committee 
+  select(-pracid)
+
+df %>% summary() # someone is aged 118 in 2023?? 
+
+# In a database as big as CPRD anything that can go wrong would have, at some level, gone wrong. I think this data set was similar but I didn't explore it that well due to the time limit. 
+
+
+```
+
+## Counts
+
+Number of consultations for each patient (save as .csv, and print number for patient 02A27z)
+
+```{r counts1}
+cons_per_patient <- df %>% 
+  filter(!is.na(consid)) %>% 
+  count(patid, consid) %>% 
+  add_count(patid)  %>% 
+  distinct(patid, n_consultations = nn) 
+
+write.csv(x = cons_per_patient, file = "data/cons_per_patient.csv", row.names = FALSE)
+
+cons_per_patient %>% 
+  filter(patid == "02A27z")
+
+
+```
+
+Number of observations for each patient (save as .csv, and print number for patient 02A27z)
+```{r, counts2}
+obvs_per_patient <- df %>% 
+  filter(!is.na(medcodeid )) %>% 
+  count(patid, medcodeid  ) %>% 
+  add_count(patid)  %>% 
+  distinct(patid, n_obvs = nn)
+
+write.csv(x = obvs_per_patient, file = "data/obvs_per_patient.csv", row.names = FALSE)
+
+df %>% 
+  filter(patid == "02A27z") %>% 
+  filter(!is.na(medcodeid )) %>% 
+  count(medcodeid) %>% 
+  nrow()
+
+```
+
+Mean number of observations per consultation
+```{r mean}
+n_obvs_per_con <- df %>% 
+  ungroup() %>% 
+  filter(!is.na(medcodeid) & !is.na(consid)) %>% 
+  distinct(consid, medcodeid) %>% 
+  group_by(consid) %>% 
+  add_count(name = "n_consid") %>% 
+  distinct(consid, n_consid) %>% 
+  ungroup() %>% 
+  summarise(mean_obvs = mean(n_consid))
+# mean = 3.46 observations (i.e. 4 observations per consultation)
+
+```
+
+Please also display number of consultations and observations per patient as a histogram.
+```{r histogram}
+
+pat_cons <- df %>% 
+  distinct(patid, consid) %>% 
+  filter(!is.na(consid)) %>% 
+  summarise( n_cons = n())
+  
+pat_obvs <-   df %>% 
+  distinct(patid, medcodeid) %>% 
+  filter(!is.na(medcodeid)) %>% 
+  summarise( n_obvs = n())
+  
+plotting_df <- full_join(x = pat_obvs, y = pat_cons, by = "patid")
+summary(plotting_df)
+
+ggplot(data = plotting_df) +
+  geom_histogram(aes(x = n_obvs), bins = 105, fill = "blue") +
+  geom_histogram(aes(x = n_cons), bins = 105, fill = "red" ) +
+  ggtitle(label = "Histogram showing consultations and observations per patient", subtitle = "blue = number of consultations, red = number of observation") +
+  xlab("")
+  
+# I should have done it differently - I should have done it on 2 different histograms and glued it together with `cowplot` or similar package - the scales are well off!! Not good :( 
+
+
+```
+  
+3. Identify how many patients have each of the following conditions:
+    - Migraine
+    - Type 2 diabetes
+    - Stomach ulcer  
+    
+```{r phenotyping}
+
+
+# Phenotyping is subjective so code lists are shared in databases like:
+# UCL/HDR-UK: https://phenotypes.healthdatagateway.org/
+# LSHTM: https://datacompass.lshtm.ac.uk/view/keywords/Code_list.html
+# Cambridge: https://www.phpc.cam.ac.uk/pcu/research/research-groups/crmh/cprd_cam/codelists/v11/
+# Birmingham
+# QOF https://digital.nhs.uk/data-and-information/data-collections-and-data-sets/data-collections/quality-and-outcomes-framework-qof/quality-and-outcome-framework-qof-business-rules/quality-and-outcomes-framework-qof-business-rules-v47.0-2022-2023
+
+# If this was a normal coding system like Read or ICD then I'd phenotype based
+# on existing publications and cite the paper. I would also get green light
+# from the client for projects
+
+
+migrane_c <- md %>% 
+  filter(grepl(pattern = "Migraine", x = Term, ignore.case = TRUE)) %>% 
+  select(aurum_code) %>% 
+  unlist(use.names = FALSE)
+
+t2d_c <- md %>%  # known different subtypes. 
+  filter(grepl(pattern = "diabetes", x = Term, ignore.case = TRUE)) %>% 
+  filter(grepl(pattern = "1", x = Term, ignore.case = TRUE)) %>% 
+  select(aurum_code) %>% 
+  unlist(use.names = FALSE)
+
+
+su_c <- md %>% 
+  filter(grepl(pattern = "Stomach|ulcer", x = Term, ignore.case = TRUE)) %>% 
+  filter(aurum_code == "NDWL524827") %>%  # on;y 1 code 
+  select(aurum_code) %>% 
+  unlist(use.names = FALSE)
+
+# since i'm running the same code >=3 times I'll write a function
+count_disease <- function(x){
+  x %>% 
+    add_count() %>% 
+    filter(n > 1) %>% 
+    distinct(patid) %>% 
+    nrow() %>% 
+    print()
+}
+
+
+
+df %>% 
+  filter(medcodeid %in% migrane_c) %>% 
+  count_disease() # 20 distinct patients 
+
+df %>% 
+  filter(medcodeid %in% t2d_c) %>% 
+  count_disease() # 15
+
+df %>% 
+  filter(medcodeid %in% su_c) %>% 
+  count_disease() # 27
+
+```
+
+## Stats
+Choose one of the above conditions. Choose an appropriate approach to statistically test if there are gender differences in the presence of this condition (1 = Male, 2 = Female, 3 = Unspecified/Other) and show your output.
+
+```{r stats}
+cases <- df %>% 
+  filter(medcodeid %in% su_c) %>% 
+  add_count() %>% 
+  filter(n > 1) %>% 
+  distinct(patid) %>% 
+  mutate(status = 1)
+
+test_df <- left_join(x = df %>% distinct(patid, gender), y = cases, by = "patid") %>% 
+  mutate(status = ifelse(test = is.na(status), yes = 0, no = status))
+
+sum(test_df$status) # these must be issues with the gender again 
+test_table <- table(gender = test_df$gender, disease_status = test_df$status)
+chisq.test(test_table)
+```
+
+## Version control & dependency control
+We do not expect you to provide robust version control procedures or dependency control for this brief exercise. However, please explain how you would do so given the appropriate time and resoure.
+
+I use git for version control - GitHub for personal use and my PhD while BitBucket for my professional life at Cegedim. Dependencey control could be done in a few different ways. I experimented with packrat before I discovered Docker images. I've build a few containers over at dockerhub. Here is a link:
+https://hub.docker.com/repository/docker/dendendocks/c3-olap-1536/general. In this instance, as it was part of my PhD, the docker file isn't publicly
+available.
+  
