@@ -159,6 +159,29 @@ ggplot(data = plotting_df) +
 # I should have done it differently - I should have done it on 2 different histograms and glued it together with `cowplot` or similar package - the scales are well off!! Not good :( 
 
 
+## If I had more time to redo the plot it would be something like this: 
+#devtools::install_github("johannesbjork/LaCroixColoR")
+# LaCroixColoR::lacroix_palettes$paired # my fav colour palettes
+library(cowplot)
+pat_cons_plot <- ggplot(data = pat_cons, aes(x = n_cons)) +
+  geom_histogram(bins = 31, fill = "#C70E7B") +
+  xlim(10, 47) +
+  theme_minimal() +
+  ggtitle(label = "Histogram of consultations per person") +
+  xlab(label = "Number of consultations") +
+  ylab(label = "Number of people")
+
+pat_obvs_plot <- ggplot(data = pat_obvs, aes(x = n_obvs)) +
+  geom_histogram(bins = 68, fill = "#007BC3") +
+  xlim(35, 110) +
+  theme_minimal() +
+  ggtitle(label = "Histogram of observations per person") +
+  xlab(label = "Number of observations") +
+  ylab(label = "Number of people")
+
+plot_grid(pat_cons_plot, pat_obvs_plot, labels = c('A', 'B'), label_size = 12)
+
+
 ```
   
 3. Identify how many patients have each of the following conditions:
